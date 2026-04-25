@@ -33,7 +33,6 @@
 
         .font-mono { font-family: 'JetBrains Mono', monospace; }
 
-        /* Glassmorphism (light) */
         .glass {
             background: rgba(255, 255, 255, 0.75);
             backdrop-filter: blur(12px);
@@ -55,7 +54,6 @@
             border-color: rgba(37, 99, 235, 0.2);
         }
 
-        /* Gradient text */
         .gradient-text {
             background: linear-gradient(135deg, #2563eb, #059669, #7c3aed);
             -webkit-background-clip: text;
@@ -63,7 +61,6 @@
             background-clip: text;
         }
 
-        /* Stats cards */
         .stat-card {
             background: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
             border: 1px solid rgba(0, 0, 0, 0.06);
@@ -77,7 +74,6 @@
             border-color: rgba(37, 99, 235, 0.2);
         }
 
-        /* Badges */
         .type-badge {
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.7rem;
@@ -93,7 +89,6 @@
         .type-deleted { background: rgba(220, 38, 38, 0.1); color: #dc2626; border: 1px solid rgba(220,38,38,0.2); }
         .type-moved { background: rgba(245, 158, 11, 0.1); color: #d97706; border: 1px solid rgba(245,158,11,0.2); }
 
-        /* Timeline */
         .timeline-item {
             background: #ffffff;
             border: 1px solid rgba(0, 0, 0, 0.06);
@@ -107,7 +102,6 @@
             transform: translateX(6px);
         }
 
-        /* Scrollbar */
         ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
@@ -124,7 +118,6 @@
             background: rgba(0,0,0,0.18);
         }
 
-        /* Pulse animation */
         .pulse-dot {
             animation: pulse 2s ease-in-out infinite;
         }
@@ -133,7 +126,6 @@
             50% { opacity: 1; }
         }
 
-        /* Code block */
         .code-block {
             background: #f1f5f9;
             border: 1px solid rgba(0,0,0,0.08);
@@ -141,7 +133,6 @@
             font-size: 0.85rem;
         }
 
-        /* Button primary */
         .btn-primary {
             background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
             color: white;
@@ -198,39 +189,27 @@
         <!-- Stats Grid -->
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-10">
             <div class="stat-card rounded-xl p-5 text-center">
-                <div class="text-4xl font-bold text-blue-600 font-mono mb-1" hx-get="/api/stats" hx-trigger="load, every 2s" hx-target="this" hx-swap="innerHTML">
-                    <span data-stat="total_events">0</span>
-                </div>
+                <div class="text-4xl font-bold text-blue-600 font-mono mb-1"><span data-stat="total_events">0</span></div>
                 <div class="text-xs text-gray-500 uppercase tracking-widest font-medium">Eventos</div>
             </div>
             <div class="stat-card rounded-xl p-5 text-center">
-                <div class="text-4xl font-bold text-emerald-600 font-mono mb-1" hx-get="/api/stats" hx-trigger="load, every 2s" hx-target="this" hx-swap="innerHTML">
-                    <span data-stat="lines_added">0</span>
-                </div>
+                <div class="text-4xl font-bold text-emerald-600 font-mono mb-1"><span data-stat="lines_added">0</span></div>
                 <div class="text-xs text-gray-500 uppercase tracking-widest font-medium">Linhas +</div>
             </div>
             <div class="stat-card rounded-xl p-5 text-center">
-                <div class="text-4xl font-bold text-red-500 font-mono mb-1" hx-get="/api/stats" hx-trigger="load, every 2s" hx-target="this" hx-swap="innerHTML">
-                    <span data-stat="lines_removed">0</span>
-                </div>
+                <div class="text-4xl font-bold text-red-500 font-mono mb-1"><span data-stat="lines_removed">0</span></div>
                 <div class="text-xs text-gray-500 uppercase tracking-widest font-medium">Linhas −</div>
             </div>
             <div class="stat-card rounded-xl p-5 text-center">
-                <div class="text-4xl font-bold text-purple-600 font-mono mb-1" hx-get="/api/stats" hx-trigger="load, every 2s" hx-target="this" hx-swap="innerHTML">
-                    <span data-stat="net_lines">0</span>
-                </div>
+                <div class="text-4xl font-bold text-purple-600 font-mono mb-1"><span data-stat="net_lines">0</span></div>
                 <div class="text-xs text-gray-500 uppercase tracking-widest font-medium">Saldo</div>
             </div>
             <div class="stat-card rounded-xl p-5 text-center">
-                <div class="text-4xl font-bold text-amber-600 font-mono mb-1" hx-get="/api/stats" hx-trigger="load, every 2s" hx-target="this" hx-swap="innerHTML">
-                    <span data-stat="files_modified">0</span>
-                </div>
+                <div class="text-4xl font-bold text-amber-600 font-mono mb-1"><span data-stat="files_modified">0</span></div>
                 <div class="text-xs text-gray-500 uppercase tracking-widest font-medium">Arquivos</div>
             </div>
             <div class="stat-card rounded-xl p-5 text-center">
-                <div class="text-4xl font-bold text-cyan-600 font-mono mb-1" hx-get="/api/stats" hx-trigger="load, every 2s" hx-target="this" hx-swap="innerHTML">
-                    <span data-stat="duration_seconds">0s</span>
-                </div>
+                <div class="text-4xl font-bold text-cyan-600 font-mono mb-1"><span data-stat="duration_seconds">0s</span></div>
                 <div class="text-xs text-gray-500 uppercase tracking-widest font-medium">Duração</div>
             </div>
         </div>
@@ -326,34 +305,55 @@
         let currentFilter = 'all';
         let ws = null;
 
+        // ── Stats polling (JS puro) ──────────────────────────────────────────────
+        async function fetchStats() {
+            try {
+                const resp = await fetch('/api/stats');
+                const stats = await resp.json();
+                Object.keys(stats).forEach(key => {
+                    const el = document.querySelector(`[data-stat="${key}"]`);
+                    if (el) {
+                        el.textContent = stats[key];
+                        el.style.transform = 'scale(1.1)';
+                        setTimeout(() => el.style.transform = 'scale(1)', 150);
+                    }
+                });
+                document.getElementById('update-time').textContent = new Date().toLocaleTimeString('pt-BR');
+            } catch (e) {
+                console.error('Stats error:', e);
+            }
+        }
+
+        setInterval(fetchStats, 2000);
+        fetchStats();
+
+        // ── Timeline ─────────────────────────────────────────────────────────────
+        async function refreshTimeline() {
+            const filter = currentFilter === 'all' ? '' : `&event_type=${currentFilter}`;
+            const resp = await fetch(`/api/activities?limit=50${filter}`);
+            const data = await resp.json();
+            renderTimeline(data.activities);
+        }
+
+        // ── WebSocket ────────────────────────────────────────────────────────────
         function connectWS() {
             const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
             ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-
             ws.onopen = () => console.log('📡 WS conectado');
             ws.onmessage = (e) => {
                 const event = JSON.parse(e.data);
                 if (event.type === 'initial' || event.type === 'activity') {
                     refreshTimeline();
-                    refreshStats();
+                    fetchStats();
                 }
             };
             ws.onclose = () => setTimeout(connectWS, 3000);
         }
 
-        function formatTime(seconds) {
-            if (seconds < 60) return `${seconds}s`;
-            if (seconds < 3600) return `${Math.floor(seconds/60)}m`;
-            return `${Math.floor(seconds/3600)}h`;
-        }
-
-        function typeBadgeClass(type) {
-            return `type-badge type-${type}`;
-        }
-
+        // ── Rendering ────────────────────────────────────────────────────────────
         function renderActivity(evt) {
             const time = new Date(evt.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            const typeClass = typeBadgeClass(evt.type);
+            const typeClass = `type-badge type-${evt.type}`;
             const icon = {
                 'modified': '✏️',
                 'created': '🆕',
@@ -395,39 +395,7 @@
             container.innerHTML = events.map(renderActivity).join('');
         }
 
-        function animateValue(el, from, to, duration = 500) {
-            gsap.to(el, {
-                innerHTML: to,
-                duration: duration / 1000,
-                snap: { innerHTML: 1 },
-                ease: "power2.out"
-            });
-        }
-
-        function updateStatsPanel(stats) {
-            Object.keys(stats).forEach(key => {
-                const el = document.querySelector(`[data-stat="${key}"]`);
-                if (el) {
-                    const current = parseInt(el.textContent) || 0;
-                    animateValue(el, current, stats[key]);
-                }
-            });
-            document.getElementById('update-time').textContent = new Date().toLocaleTimeString('pt-BR');
-        }
-
-        async function refreshTimeline() {
-            const filter = currentFilter === 'all' ? '' : `&event_type=${currentFilter}`;
-            const resp = await fetch(`/api/activities?limit=50${filter}`);
-            const data = await resp.json();
-            renderTimeline(data.activities);
-        }
-
-        async function refreshStats() {
-            const resp = await fetch('/api/stats');
-            const stats = await resp.json();
-            updateStatsPanel(stats);
-        }
-
+        // ── Modal & Project Selection ───────────────────────────────────────────
         function openProjectModal() {
             document.getElementById('project-modal').classList.remove('hidden');
             document.getElementById('project-path-input').focus();
@@ -457,7 +425,7 @@
                     document.getElementById('project-name').textContent = path.split('/').pop();
                     closeProjectModal();
                     refreshTimeline();
-                    refreshStats();
+                    fetchStats();
                 } else {
                     document.getElementById('project-error').textContent = data.error || 'Erro desconhecido';
                     document.getElementById('project-error').classList.remove('hidden');
@@ -494,15 +462,13 @@
             return (bytes/(1024*1024)).toFixed(1) + ' MB';
         }
 
+        // ── Init ─────────────────────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', () => {
             if (window.location.protocol === 'http:' || window.location.hostname === 'localhost') {
                 connectWS();
             }
 
-            setInterval(() => {
-                refreshStats();
-                refreshTimeline();
-            }, 2000);
+            setInterval(refreshTimeline, 2000);
 
             document.getElementById('select-project-btn').addEventListener('click', openProjectModal);
             document.getElementById('cancel-project-btn').addEventListener('click', closeProjectModal);
