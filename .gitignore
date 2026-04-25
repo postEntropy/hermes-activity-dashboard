@@ -1,0 +1,12 @@
+# Ignora tudo por padrão
+*
+# Mas libera estes arquivos (negacao)
+!dashboard.py
+!requirements.txt
+!README.md
+!frontend/
+!frontend/*
+
+# Ignora pastas internas do frontend (se houver)
+frontend/*/
+!.gitignore
