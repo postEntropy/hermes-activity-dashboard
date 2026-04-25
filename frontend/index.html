@@ -272,6 +272,35 @@
         </div>
 
         <!-- Footer -->
+        
+        <!-- Diff Drawer (Slide-over Right) -->
+        <div id="diff-drawer" class="fixed inset-y-0 right-0 w-1/2 lg:w-1/3 xl:w-1/4 bg-white shadow-2xl border-l border-gray-200 transform translate-x-full transition-transform duration-300 z-50 flex flex-col">
+            <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                        <span id="drawer-type-badge" class="px-2 py-0.5 rounded text-xs font-semibold">TYPE</span>
+                        <h4 id="drawer-path" class="text-sm font-mono text-blue-600 truncate">/path/file.py</h4>
+                    </div>
+                    <p id="drawer-stats" class="text-xs text-gray-500 font-mono mt-0.5">+0 −0</p>
+                </div>
+                <button onclick="DiffDrawer.close()" class="text-gray-400 hover:text-gray-600 p-1">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto p-4">
+                <div class="grid grid-cols-2 gap-4 h-full">
+                    <div>
+                        <div class="text-xs font-semibold text-gray-500 mb-2">ORIGINAL</div>
+                        <pre id="diff-original" class="text-xs font-mono bg-gray-50 p-3 rounded border border-gray-200 overflow-auto max-h-[calc(100vh-200px)]"></pre>
+                    </div>
+                    <div>
+                        <div class="text-xs font-semibold text-gray-500 mb-2">MODIFIED</div>
+                        <pre id="diff-modified" class="text-xs font-mono bg-gray-50 p-3 rounded border border-gray-200 overflow-auto max-h-[calc(100vh-200px)]"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         </div> <!-- end main-content-wrapper -->
 <footer class="mt-8 text-center text-gray-400 text-xs font-mono">
             <p>Hermes Activity Dashboard v1.0 • Funciona independentemente do agente</p>
@@ -520,5 +549,6 @@
     </script>
 
     <script src="/static/js/filetree.js"></script>
+    <script src="/static/js/diff.js"></script>
 </body>
 </html>
