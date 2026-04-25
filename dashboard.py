@@ -167,6 +167,9 @@ app.add_middleware(
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "frontend"))
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
+# Monta arquivos estáticos (frontend completo)
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "frontend")), name="static")
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
