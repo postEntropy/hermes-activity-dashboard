@@ -57,7 +57,9 @@ if WATCHDOG_AVAILABLE:
             p = Path(path)
             if not p.is_relative_to(self.project_path):
                 return False
-            ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build', '.next', '.cache', 'temp', 'tmp'}
+            # Pastas comuns que geralmente não queremos monitorar
+            ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build', '.next', '.cache'}
+            # NOTA: 'temp' e 'tmp' foram removidos — são nomes de pasta legítimos em projetos
             if any(part in ignore_dirs for part in p.parts):
                 return False
             code_exts = {'.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.scss', '.json', '.yaml', '.yml', '.md', '.txt', '.sh', '.bash', '.zsh', '.rs', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rb', '.php', '.swift', '.kt'}
@@ -178,6 +180,42 @@ async def api_status():
         "total_events": len(_activity_buffer),
         "uptime_seconds": int(time.time() - _start_time) if '_start_time' in globals() else 0,
     })
+
+
+@app.get("/api/tree")
+async def api_tree():
+    """Retorna árvore de arquivos do projeto atual."""
+    if not _project_path:
+        return JSONResponse({"error": "Nenhum projeto definido"}, status_code=400)
+
+    def build_tree(path: Path) -> dict:
+        try:
+            stat = path.stat()
+            node = {
+                "name": path.name,
+                "path": str(path),
+                "is_dir": path.is_dir(),
+                "size": stat.st_size if path.is_file() else 0,
+                "modified": stat.st_mtime,
+                "children": []
+            }
+            if path.is_dir():
+                children = []
+                try:
+                    for child in sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
+                        if child.name.startswith('.') or child.name in {'__pycache__', 'node_modules', '.git'}:
+                            continue
+                        children.append(build_tree(child))
+                    node["children"] = children
+                except PermissionError:
+                    pass
+            return node
+        except Exception:
+            return {"name": path.name, "error": True}
+
+    tree = build_tree(_project_path)
+    return JSONResponse(tree)
+
 
 @app.get("/api/activities")
 async def api_activities(limit: int = 50, offset: int = 0, event_type: Optional[str] = None):
