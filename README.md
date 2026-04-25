@@ -2,7 +2,7 @@
 
 Monitoramento em tempo real de modificações em projetos de código. Veja exatamente o que está mudando, quantas linhas são adicionadas/removidas, e acompanhe a evolução do seu código enquanto trabalha.
 
-![Modern Dashboard](https://img.shields.io/badge/style-modern-dark?style=flat-square) ![FastAPI](https://img.shields.io/badge/FastAPI-0.110.0-009688?style=flat-square) ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square)
+![Modern Dashboard](https://img.shields.io/badge/style-light%20%26%20clean-2563eb?style=flat-square) ![FastAPI](https://img.shields.io/badge/FastAPI-0.110.0-009688?style=flat-square) ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square)
 
 ---
 
@@ -12,15 +12,15 @@ Monitoramento em tempo real de modificações em projetos de código. Veja exata
 - **📊 Estatísticas vivas** — Linhas adicionadas/removidas, arquivos modificados, duração
 - **📁 Multi-projeto** — Abra qualquer pasta do seu sistema
 - **🔍 Diff viewer** — Veja exatamente o que mudou em cada arquivo
-- **🎨 Design moderno** — Dark mode, glassmorphism, gradientes suaves, tipografia de alta qualidade
-- **🖥️ Desktop-first** — Otimizado para desenvolvedores (masresponsivo)
+- **🎨 Design light clean** — Tema claro profissional, gradientes suaves, tipografia de alta qualidade
+- **🖥️ Desktop-first** — Otimizado para desenvolvedores (mas responsivo)
 - **⚡ Zero interferência** — Roda separado, não afeta o Hermes nem suas ferramentas
 
 ---
 
 ## 📸 Screenshots
 
-*(O dashboard tem um visual moderno com cards em gradiente, timeline animada e badges coloridas por tipo de evento)*
+*(Dashboard em light mode com cards brancos, sombras suaves, e acentos azuis)*
 
 ---
 
@@ -36,10 +36,15 @@ Monitoramento em tempo real de modificações em projetos de código. Veja exata
 # 1. Clone ou baixe o projeto
 cd ~/hermes-activity-dashboard
 
-# 2. Instale dependências
+# 2. Crie e ative o venv local (recomendado)
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# ou venv\Scripts\activate no Windows
+
+# 3. Instale dependências
 pip install -r requirements.txt
 
-# 3. Execute
+# 4. Execute
 python dashboard.py --project /caminho/do/seu/projeto
 ```
 
@@ -54,6 +59,7 @@ python dashboard.py --project ~/projetos/app --port 8080 --host 0.0.0.0
 
 ### 1. Inicie o dashboard
 ```bash
+source venv/bin/activate  # se usou venv
 python dashboard.py --project /home/leonardo/meu-projeto
 ```
 
@@ -112,29 +118,11 @@ Clique em **"Abrir Projeto"** no topo e selecione nova pasta.
 
 ## 🤔 Como Funciona?
 
-```mermaid
-graph LR
-    A[Pasta do Projeto] -->|watchdog monitora| B(Event Handler)
-    B --> C{Intercepta mudanças}
-    C -->|create| D[CREATED]
-    C -->|modify| E[MODIFIED]
-    C -->|delete| F[DELETED]
-    C -->|move| G[MOVED]
-    D --> H[JSONL Log]
-    E --> H
-    F --> H
-    G --> H
-    H --> I[FastAPI Lê Log]
-    I --> J[Calcula Stats]
-    J --> K[Frontend HTMX]
-    K --> L[Atualização UI]
-```
-
 1. **Observer** — Usa `watchdog` para detectar mudanças na pasta (criação, modificação, exclusão, movimentação)
 2. **Buffer** — Eventos são mantidos em memória (circular buffer de 5000 eventos)
 3. **API** — FastAPI serve JSON + HTML
 4. **Frontend** — HTMX atualiza a página automaticamente sem JS pesado
-5. **WebSocket** — Push instantâneo de novos eventos (se disponível)
+5. **WebSocket** — Push instantâneo de novos eventos (quando disponível)
 
 ---
 
@@ -144,9 +132,10 @@ graph LR
 Edite no `frontend/index.html`:
 ```css
 :root {
-    --accent-primary: #3b82f6;  /* Azul */
-    --accent-secondary: #10b981; /* Verde */
-    --accent-tertiary: #8b5cf6;  /* Roxo */
+    --accent-primary: #2563eb;  /* Azul primário */
+    --accent-secondary: #059669; /* Verde */
+    --accent-tertiary: #7c3aed;  /* Roxo */
+    --bg-light: #f8fafc;         /* Fundo claro */
 }
 ```
 
@@ -168,6 +157,7 @@ kill -9 <PID>       # Mata o processo
 
 ### Watchdog não instalado
 ```bash
+source venv/bin/activate
 pip install watchdog
 ```
 
@@ -190,17 +180,18 @@ hermes-activity-dashboard/
 │   └── index.html       # Interface completa (estáticos)
 ├── requirements.txt     # Dependências Python
 ├── README.md           # Este arquivo
+├── venv/               # Virtual environment (não commitado)
 └── activity.log        # (gerado) Log de eventos
 ```
 
 ---
 
-## 🚀 roadmap
+## 🚀 Roadmap
 
-- [ ] Gráfico de atividade por hora (Grátis)
+- [ ] Gráfico de atividade por hora
 - [ ] Exportação CSV/JSON
 - [ ] Notificações desktop
-- [ ] Modo fullscreen
+- [ ] Modo dark/light toggle
 - [ ] Suporte a múltiplos projetos simultâneos
 - [ ] Integração com Git (commits associados)
 
