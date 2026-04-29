@@ -1,6 +1,7 @@
 """
 Hermes Activity Dashboard — Monitoramento independente de projetos.
 Roda como servidor standalone, observando modificações em uma pasta.
+Test change to verify dashboard is working.
 """
 
 import argparse
@@ -13,14 +14,17 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+import subprocess
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Body
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from starlette.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+import database
 
 # ── Watchdog (observer de arquivos) ──────────────────────────────────────────
 try:
@@ -33,15 +37,68 @@ except ImportError:
     print("⚠️  watchdog não instalado. Instale com: pip install watchdog")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-LOG_PATH = Path.home() / ".hermes" / "activity-dashboard" / "activity.log"
-LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+LOG_PATH = Path(__file__).parent / "activity.log"
+SETTINGS_PATH = Path(__file__).parent / "settings.json"
+MAX_FILE_SIZE = 500 * 1024  # 500KB limit for diffs and file previews
+
+def save_settings(settings: dict):
+    try:
+        with open(SETTINGS_PATH, "w") as f:
+            json.dump(settings, f, indent=2)
+    except Exception:
+        pass
+
+def load_settings() -> dict:
+    try:
+        if SETTINGS_PATH.exists():
+            with open(SETTINGS_PATH, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"projects": [], "active_projects": []}
+
+def add_project(path: str):
+    settings = load_settings()
+    if "projects" not in settings:
+        settings["projects"] = []
+    if path not in settings["projects"]:
+        settings["projects"].append(path)
+    if "active_projects" not in settings:
+        settings["active_projects"] = []
+    if path not in settings["active_projects"]:
+        settings["active_projects"].append(path)
+    save_settings(settings)
+    return settings
+
+def remove_project(path: str):
+    settings = load_settings()
+    if "projects" in settings and path in settings["projects"]:
+        settings["projects"].remove(path)
+    if "active_projects" in settings and path in settings["active_projects"]:
+        settings["active_projects"].remove(path)
+    save_settings(settings)
+    return settings
+
+def get_active_projects():
+    settings = load_settings()
+    return settings.get("active_projects", [])
+
+def set_active_projects(paths: list):
+    settings = load_settings()
+    settings["active_projects"] = paths
+    save_settings(settings)
+    return settings
+
+import difflib
 
 # ── Estado Global ─────────────────────────────────────────────────────────────
 _project_path: Optional[Path] = None
-_observer: Optional[Any] = None
+_observers: Dict[Path, Any] = {}  # Multiple observers for multiple projects
 _connected_clients: List[WebSocket] = []
 _activity_buffer: List[Dict[str, Any]] = []
 _MAX_BUFFER = 5000
+_loop: Optional[asyncio.AbstractEventLoop] = None
+_file_cache: Dict[str, List[str]] = {} # Cache para calcular diffs
 
 # ── File Event Handler (só se watchdog disponível) ───────────────────────────
 if WATCHDOG_AVAILABLE:
@@ -54,16 +111,24 @@ if WATCHDOG_AVAILABLE:
             self._debounce_sec = 0.3
 
         def _is_relevant(self, path: str) -> bool:
-            p = Path(path)
-            if not p.is_relative_to(self.project_path):
+            try:
+                abs_path = os.path.abspath(path)
+                abs_project = os.path.abspath(self.project_path)
+                
+                if not abs_path.startswith(abs_project):
+                    return False
+                
+                p = Path(abs_path)
+                # Pastas comuns que geralmente não queremos monitorar
+                ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build', '.next', '.cache'}
+                if any(part in ignore_dirs for part in p.parts):
+                    return False
+                
+                code_exts = {'.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.scss', '.json', '.yaml', '.yml', '.md', '.txt', '.sh', '.bash', '.zsh', '.rs', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rb', '.php', '.swift', '.kt'}
+                return p.suffix in code_exts or p.name in {'Dockerfile', 'Makefile', 'docker-compose.yml', 'docker-compose.yaml'}
+            except Exception as e:
+                print(f"Error in _is_relevant: {e}")
                 return False
-            # Pastas comuns que geralmente não queremos monitorar
-            ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build', '.next', '.cache'}
-            # NOTA: 'temp' e 'tmp' foram removidos — são nomes de pasta legítimos em projetos
-            if any(part in ignore_dirs for part in p.parts):
-                return False
-            code_exts = {'.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.scss', '.json', '.yaml', '.yml', '.md', '.txt', '.sh', '.bash', '.zsh', '.rs', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rb', '.php', '.swift', '.kt'}
-            return p.suffix in code_exts or p.name in {'Dockerfile', 'Makefile', 'docker-compose.yml', 'docker-compose.yaml'}
 
         def _should_debounce(self, path: str) -> bool:
             now = time.time()
@@ -79,13 +144,21 @@ if WATCHDOG_AVAILABLE:
             if self._should_debounce(src_path):
                 return
 
+            print(f"🔔 Evento: {event_type} em {src_path}")
+            
             abs_src = os.path.abspath(src_path)
+            diff_info = calculate_diff(abs_src, event_type)
+            
             event = {
                 "id": str(uuid4()),
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "type": event_type,
                 "path": abs_src,
                 "relative_path": os.path.relpath(abs_src, self.project_path),
+                "lines_added": diff_info["lines_added"],
+                "lines_removed": diff_info["lines_removed"],
+                "size_bytes": diff_info["size_bytes"],
+                "diff": diff_info["diff"],
             }
             if dest_path:
                 event["dest_path"] = os.path.abspath(dest_path)
@@ -93,17 +166,22 @@ if WATCHDOG_AVAILABLE:
                 event.update(extra)
 
             try:
-                LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
                 with open(LOG_PATH, "a", encoding="utf-8") as f:
                     f.write(json.dumps(event, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error writing to log: {e}")
 
             _activity_buffer.insert(0, event)
             if len(_activity_buffer) > _MAX_BUFFER:
                 _activity_buffer.pop()
 
-            asyncio.create_task(broadcast_event(event))
+            try:
+                database.save_event(event)
+            except Exception as e:
+                print(f"Error saving to DB: {e}")
+
+            if _loop:
+                asyncio.run_coroutine_threadsafe(broadcast_event(event), _loop)
 
         def on_modified(self, event):
             if not event.is_directory:
@@ -123,22 +201,72 @@ if WATCHDOG_AVAILABLE:
 
 # ── Diff Calculation ───────────────────────────────────────────────────────────
 def calculate_diff(path: str, event_type: str) -> Dict[str, Any]:
-    """Calcula diff para arquivos modificados/criados."""
-    if event_type not in ("modified", "created", "moved"):
+    """Calcula diff real comparando com o estado anterior em memória."""
+    global _file_cache
+    
+    lines_added = 0
+    lines_removed = 0
+    diff_text = ""
+    size_bytes = 0
+    
+    if not os.path.exists(path) and event_type != "deleted":
         return {"lines_added": 0, "lines_removed": 0, "diff": "", "size_bytes": 0}
-    if not os.path.exists(path):
-        return {"lines_added": 0, "lines_removed": 0, "diff": "", "size_bytes": 0}
+
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        lines = content.splitlines()
+        # Check file size before reading for non-deleted events
+        if event_type != "deleted":
+            try:
+                size_bytes = os.path.getsize(path)
+            except Exception:
+                size_bytes = 0
+            
+            if size_bytes > MAX_FILE_SIZE:
+                return {
+                    "lines_added": 0,
+                    "lines_removed": 0,
+                    "diff": f"File too large to diff (>500KB)",
+                    "size_bytes": size_bytes,
+                }
+
+        new_content = []
+        if event_type != "deleted":
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                new_content = f.readlines()
+
+        old_content = _file_cache.get(path, [])
+        
+        if event_type == "created":
+            diff_text = "".join([f"+{line}" for line in new_content[:100]])
+            lines_added = len(new_content)
+        elif event_type == "modified":
+            # Lazy caching: if file not in cache, return special message and cache now
+            if not old_content:
+                diff_text = "Diff unavailable for first modification after startup."
+            else:
+                diff = list(difflib.unified_diff(old_content, new_content, n=3))
+                diff_text = "".join(diff)
+                for line in diff:
+                    if line.startswith("+") and not line.startswith("+++"):
+                        lines_added += 1
+                    elif line.startswith("-") and not line.startswith("---"):
+                        lines_removed += 1
+        elif event_type == "deleted":
+            lines_removed = len(old_content)
+            diff_text = "File deleted."
+            _file_cache.pop(path, None)
+            return {"lines_added": 0, "lines_removed": lines_removed, "diff": diff_text, "size_bytes": 0}
+
+        # Lazy caching: only populate when file is modified for the first time
+        _file_cache[path] = new_content
+        
         return {
-            "lines_added": len(lines),
-            "lines_removed": 0,
-            "diff": content[:3000],
-            "size_bytes": len(content.encode("utf-8")),
+            "lines_added": lines_added,
+            "lines_removed": lines_removed,
+            "diff": diff_text,
+            "size_bytes": size_bytes,
         }
-    except Exception:
+    except Exception as e:
+        print(f"Diff error for {path}: {e}")
         return {"lines_added": 0, "lines_removed": 0, "diff": "", "size_bytes": 0}
 
 # ── WebSocket Broadcast ────────────────────────────────────────────────────────
@@ -154,7 +282,44 @@ async def broadcast_event(event: Dict[str, Any]):
         _connected_clients.remove(ws)
 
 # ── FastAPI App ────────────────────────────────────────────────────────────────
-app = FastAPI(title="Hermes Activity Dashboard", docs_url="/docs", redoc_url="/redoc")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _loop, _project_path, _observers
+    _loop = asyncio.get_running_loop()
+    
+    # Initialize database and load events
+    try:
+        database.create_tables()
+        print("Database initialized")
+        events = database.load_events(5000)
+        if events:
+            _activity_buffer.extend(events)
+            print(f"Loaded {len(events)} events from database")
+    except Exception as e:
+        print(f"Database init error: {e}")
+    
+    # Start observing all active projects
+    settings = load_settings()
+    active_projects = settings.get("active_projects", [])
+    
+    for project_path in active_projects:
+        p = Path(project_path).expanduser().resolve()
+        if p.exists() and p not in _observers:
+            if WATCHDOG_AVAILABLE and Observer is not None:
+                try:
+                    event_handler = ProjectEventHandler(p)
+                    observer = Observer()
+                    observer.schedule(event_handler, str(p), recursive=True)
+                    observer.start()
+                    _observers[p] = observer
+                    _project_path = p
+                    print(f"👀 Observando: {p}")
+                except Exception as e:
+                    print(f"❌ Erro ao iniciar observer para {p}: {e}")
+             
+    yield
+
+app = FastAPI(title="Hermes Activity Dashboard", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -164,59 +329,85 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "frontend"))
-
 # ── Routes ─────────────────────────────────────────────────────────────────────
-# Monta arquivos estáticos (frontend completo)
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "frontend")), name="static")
+# Frontend buildado - assets are in dist/assets/
+DIST_PATH = os.path.join(os.path.dirname(__file__), "frontend", "dist", "assets")
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.get("/")
+async def index():
+    index_path = os.path.join(os.path.dirname(__file__), "frontend", "dist", "index.html")
+    if os.path.exists(index_path):
+        return HTMLResponse(open(index_path).read())
+    return HTMLResponse("<h1>Build frontend: cd frontend && npm run build</h1>")
+
+@app.get("/assets/{file_path:path}")
+async def serve_assets(file_path: str):
+    file_path_abs = os.path.join(os.path.dirname(__file__), "frontend", "dist", "assets", file_path)
+    if os.path.exists(file_path_abs):
+        content = open(file_path_abs, 'rb').read()
+        return Response(content)
+    return HTMLResponse("Asset not found", status_code=404)
 
 @app.get("/api/status")
 async def api_status():
     return JSONResponse({
         "project_path": str(_project_path) if _project_path else None,
-        "observer_running": _observer is not None and _observer.is_alive(),
+        "observers_running": len(_observers),
+        "total_observers": len(_observers),
         "events_in_buffer": len(_activity_buffer),
         "total_events": len(_activity_buffer),
         "uptime_seconds": int(time.time() - _start_time) if '_start_time' in globals() else 0,
     })
 
 
-@app.get("/api/tree")
-async def api_tree():
+@app.get("/api/files")
+async def api_files():
     """Retorna árvore de arquivos do projeto atual."""
     if not _project_path:
-        return JSONResponse({"error": "Nenhum projeto definido"}, status_code=400)
+        return JSONResponse([], status_code=200)
 
-    def build_tree(path: Path) -> dict:
+    root_path = os.path.abspath(_project_path)
+    
+    def get_tree(dir_path: str, max_depth: int = 4) -> List[dict]:
+        if max_depth < 0: return []
+        nodes = []
         try:
-            stat = path.stat()
-            node = {
-                "name": path.name,
-                "path": str(path),
-                "is_dir": path.is_dir(),
-                "size": stat.st_size if path.is_file() else 0,
-                "modified": stat.st_mtime,
-                "children": []
-            }
-            if path.is_dir():
-                children = []
-                try:
-                    for child in sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
-                        if child.name.startswith('.') or child.name in {'__pycache__', 'node_modules', '.git'}:
+            with os.scandir(dir_path) as entries:
+                # Sort: directories first
+                item_list = list(entries)
+                sorted_entries = sorted(item_list, key=lambda e: (not e.is_dir(), e.name.lower()))
+                
+                for entry in sorted_entries:
+                    try:
+                        if entry.name.startswith('.') or entry.name in {'__pycache__', 'node_modules', '.git', 'venv', 'dist', 'build'}:
                             continue
-                        children.append(build_tree(child))
-                    node["children"] = children
-                except PermissionError:
-                    pass
-            return node
-        except Exception:
-            return {"name": path.name, "error": True}
+                        
+                        # Usa realpath para evitar problemas com links simbólicos
+                        abs_path = os.path.realpath(entry.path)
+                        rel_path = os.path.relpath(abs_path, root_path)
+                        
+                        try:
+                            stats = entry.stat()
+                            size = stats.st_size
+                        except Exception:
+                            size = 0
 
-    tree = build_tree(_project_path)
+                        node = {
+                            "name": entry.name,
+                            "path": rel_path,
+                            "type": "directory" if entry.is_dir() else "file",
+                            "size": size,
+                            "children": get_tree(entry.path, max_depth - 1) if entry.is_dir() else []
+                        }
+                        nodes.append(node)
+                    except Exception as e:
+                        print(f"Skipping entry {entry.name}: {e}")
+                        continue
+        except Exception as e:
+            print(f"Error scanning {dir_path}: {e}")
+        return nodes
+
+    tree = get_tree(root_path)
     return JSONResponse(tree)
 
 
@@ -268,39 +459,200 @@ async def api_stats():
 async def api_event_detail(event_id: str):
     for evt in _activity_buffer:
         if evt.get("id") == event_id:
-            diff_info = calculate_diff(evt["path"], evt["type"])
             return JSONResponse({
                 "event": evt,
-                "diff": diff_info["diff"],
-                "lines_added": diff_info["lines_added"],
-                "lines_removed": diff_info["lines_removed"],
-                "size_bytes": diff_info["size_bytes"],
+                "diff": evt.get("diff", ""),
+                "lines_added": evt.get("lines_added", 0),
+                "lines_removed": evt.get("lines_removed", 0),
+                "size_bytes": evt.get("size_bytes", 0),
             })
     return JSONResponse({"error": "Evento não encontrado"}, status_code=404)
 
+# ── New Enhanced APIs ─────────────────────────────────────────────────────────
+
+@app.get("/api/stats/advanced")
+async def api_stats_advanced():
+    """Advanced statistics with analytics."""
+    try:
+        stats = database.get_advanced_stats()
+        return JSONResponse(stats)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/file/{path:path}/history")
+async def api_file_history(path: str):
+    """Get modification history for a specific file."""
+    try:
+        abs_path = os.path.abspath(path)
+        history = database.get_file_history(abs_path)
+        return JSONResponse({"file": abs_path, "history": history})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/search")
+async def api_search(q: str = "", limit: int = 20):
+    """Global search across files and events."""
+    if not q:
+        return JSONResponse({"events": [], "files": []})
+    
+    try:
+        events = database.search_events(q, limit)
+        files = database.search_files(q)
+        return JSONResponse({"events": events, "files": files})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/export")
+async def api_export(format: str = "json"):
+    """Export all events as JSON or CSV."""
+    try:
+        data = database.export_events(format)
+        if format == "csv":
+            return JSONResponse({"data": data}, media_type="text/csv")
+        return JSONResponse(json.loads(data), media_type="application/json")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/sessions")
+async def api_sessions():
+    """Get work sessions."""
+    try:
+        sessions = database.get_sessions()
+        return JSONResponse({"sessions": sessions})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+DB_PATH = Path(__file__).parent / "hermes.db"
+
+@app.get("/api/health")
+async def api_health():
+    """Server health check."""
+    return JSONResponse({
+        "status": "ok",
+        "database": "connected" if DB_PATH.exists() else "not_found",
+        "uptime": int(time.time() - _start_time) if '_start_time' in globals() else 0
+    })
+
+@app.get("/api/browse")
+async def api_browse():
+    """Abre explorador nativo do sistema."""
+    import platform
+    system = platform.system()
+    
+    try:
+        if system == "Linux":
+            for cmd in [
+                ["zenity", "--file-selection", "--directory", "--title=Selecionar Pasta"],
+                ["kdialog", "--getexistingdirectory"],
+                ["python3", "-c", "import tkinter; from tkinter import filedialog; print(filedialog.askdirectory(title='Selecionar Pasta'))"],
+            ]:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    return JSONResponse({"path": result.stdout.strip()})
+        elif system == "Darwin":
+            result = subprocess.run(["osascript", "-e", 'choose folder'], capture_output=True, text=True)
+            if result.returncode == 0:
+                return JSONResponse({"path": result.stdout.strip()})
+        elif system == "Windows":
+            result = subprocess.run(["powershell", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.FolderBrowserDialog]::new().SelectedPath"], capture_output=True, text=True)
+            if result.returncode == 0:
+                return JSONResponse({"path": result.stdout.strip()})
+    except Exception as e:
+        pass
+    
+    return JSONResponse({"path": None, "error": "Native explorer not available"})
+
+@app.get("/api/file")
+async def api_file(path: str):
+    """Retorna conteúdo de um arquivo."""
+    try:
+        p = Path(path).resolve()
+        if not p.exists():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        
+        size_bytes = p.stat().st_size
+        if size_bytes > MAX_FILE_SIZE:
+            return JSONResponse({"error": "File is too large to preview (>500KB)"}, status_code=413)
+        
+        content = p.read_text(encoding="utf-8", errors="replace")
+        return JSONResponse({"path": str(p), "content": content, "size": len(content)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.post("/api/set-project")
-async def api_set_project(path: str):
-    global _project_path, _observer
+async def api_set_project(payload: dict = Body(...)):
+    global _project_path, _activity_buffer, _file_cache, _start_time, _observers
+    path = payload.get("path")
+    if not path:
+        return JSONResponse({"error": "Caminho não fornecido"}, status_code=400)
+
     p = Path(path).expanduser().resolve()
     if not p.exists() or not p.is_dir():
         return JSONResponse({"error": "Pasta não existe"}, status_code=400)
 
-    if _observer:
-        _observer.stop()
-        _observer.join()
-        _observer = None
-
-    _project_path = p
+    print(f"📁 Adicionando projeto: {p}")
+    
+    # Add to projects list
+    settings = add_project(str(p))
+    active_projects = settings.get("active_projects", [])
+    
+    # Start observing this project
     if WATCHDOG_AVAILABLE and Observer is not None:
-        event_handler = ProjectEventHandler(p)
-        _observer = Observer()
-        _observer.schedule(event_handler, str(p), recursive=True)
-        _observer.start()
-        print(f"👀 Observando: {p}")
-    else:
-        print("⚠️  Watchdog não disponível — observer não iniciado")
+        if p not in _observers:
+            try:
+                event_handler = ProjectEventHandler(p)
+                observer = Observer()
+                observer.schedule(event_handler, str(p), recursive=True)
+                observer.start()
+                _observers[p] = observer
+                print(f"👀 Observando: {p}")
+            except Exception as e:
+                print(f"❌ Erro ao iniciar observer: {e}")
+    
+    _project_path = p
+    _start_time = time.time()
+    
+    return JSONResponse({
+        "status": "ok", 
+        "project_path": str(p), 
+        "observer": WATCHDOG_AVAILABLE,
+        "projects": settings.get("projects", []),
+        "active_projects": settings.get("active_projects", [])
+    })
 
-    return JSONResponse({"status": "ok", "project_path": str(p), "observer": WATCHDOG_AVAILABLE})
+@app.get("/api/projects")
+async def api_projects():
+    """List all tracked projects."""
+    settings = load_settings()
+    return JSONResponse({
+        "projects": settings.get("projects", []),
+        "active_projects": settings.get("active_projects", [])
+    })
+
+@app.post("/api/projects/remove")
+async def api_remove_project(payload: dict = Body(...)):
+    """Remove a project from tracking."""
+    path = payload.get("path")
+    if not path:
+        return JSONResponse({"error": "Caminho não fornecido"}, status_code=400)
+    
+    settings = remove_project(path)
+    
+    # Stop observing if active
+    p = Path(path).expanduser().resolve()
+    if p in _observers:
+        try:
+            _observers[p].stop()
+            _observers[p].join()
+            del _observers[p]
+        except Exception:
+            pass
+    
+    return JSONResponse({
+        "status": "ok",
+        "projects": settings.get("projects", []),
+        "active_projects": settings.get("active_projects", [])
+    })
 
 @app.post("/api/reset")
 async def api_reset():
@@ -366,11 +718,6 @@ def main():
     if args.project:
         print(f"   Projeto: {args.project}")
     print("   Pressione Ctrl+C para parar\n")
-
-    if args.project:
-        p = Path(args.project).expanduser().resolve()
-        if p.exists():
-            asyncio.run(api_set_project(str(p)))
 
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
 
