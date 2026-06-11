@@ -1,0 +1,131 @@
+/* Projects Page - Dark Industrial Theme */
+/* Most project page styles are in custom.css. This file contains overrides and additional styles. */
+
+/* Modal overlay for project modal (legacy support) */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    animation: fadeIn 0.3s ease;
+}
+
+.modal-overlay.open {
+    display: flex;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* FS Browser Modal - specific positioning */
+#fs-browser-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 90%;
+    max-width: 600px;
+    background: var(--bg-secondary, #1a1a1a);
+    border: 2px solid var(--border-color, #333);
+    border-radius: var(--radius-lg, 8px);
+    box-shadow: 0 0 40px rgba(0, 240, 255, 0.1);
+    z-index: 2001;
+    padding: 24px;
+    display: none;
+}
+
+#fs-browser-modal h2 {
+    font-family: var(--font-display, 'Orbitron'), sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-top: 0;
+    margin-bottom: 8px;
+    color: var(--text-primary, #e0e0e0);
+}
+
+#fs-browser-modal p {
+    color: var(--text-secondary, #888);
+    margin-bottom: 16px;
+    font-family: var(--font-mono, 'IBM Plex Mono'), monospace;
+    font-size: 0.85rem;
+}
+
+.browser-path-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg-tertiary, #2a2a2a);
+    border: 1px solid var(--border-color, #333);
+    border-radius: var(--radius, 4px);
+    margin-bottom: 12px;
+    font-family: var(--font-mono, 'IBM Plex Mono'), monospace;
+    font-size: 0.8rem;
+    color: var(--text-primary, #e0e0e0);
+    overflow-x: auto;
+}
+
+.browser-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color, #333);
+    border-radius: var(--radius, 4px);
+    background: var(--bg-tertiary, #2a2a2a);
+}
+
+.fs-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border-color, #333);
+    font-family: var(--font-mono, 'IBM Plex Mono'), monospace;
+    font-size: 0.8rem;
+    color: var(--text-secondary, #888);
+    transition: background 0.1s;
+}
+
+.fs-item:hover {
+    background: rgba(0, 240, 255, 0.05);
+    color: var(--text-primary, #e0e0e0);
+}
+
+.fs-item svg {
+    flex-shrink: 0;
+    opacity: 0.6;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Ensure dashboard view is hidden/shown correctly */
+.dashboard-view {
+    display: flex;
+    width: 100%;
+    height: 100vh;
+}
+
+.dashboard-view.hidden {
+    display: none;
+}
+
+.projects-page-modern.hidden {
+    display: none;
+}

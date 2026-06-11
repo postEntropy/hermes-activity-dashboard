@@ -100,6 +100,87 @@ _MAX_BUFFER = 5000
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _file_cache: Dict[str, List[str]] = {} # Cache para calcular diffs
 
+def _current_project_path() -> Optional[str]:
+    return str(_project_path) if _project_path else None
+
+def _infer_project_path(file_path: str, projects: List[str]) -> Optional[str]:
+    best_match = None
+    for project in projects:
+        resolved = str(Path(project).expanduser().resolve())
+        if file_path == resolved or file_path.startswith(resolved + os.sep):
+            if not best_match or len(resolved) > len(best_match):
+                best_match = resolved
+    return best_match
+
+def _event_matches_project(event: Dict[str, Any], project_path: str) -> bool:
+    event_project = event.get("project_path")
+    if event_project:
+        return event_project == project_path
+    event_path = event.get("path")
+    if not event_path:
+        return False
+    return event_path == project_path or event_path.startswith(project_path + os.sep)
+
+def _filter_events_for_current_project(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    current = _current_project_path()
+    if not current:
+        return []
+    return [evt for evt in events if _event_matches_project(evt, current)]
+
+def _path_within_project(abs_path: str, abs_project: str) -> bool:
+    try:
+        return os.path.commonpath([abs_path, abs_project]) == abs_project
+    except ValueError:
+        return False
+
+def _cache_file_contents(path: str) -> int:
+    try:
+        if not os.path.exists(path):
+            return 0
+
+        size_bytes = os.path.getsize(path)
+        if size_bytes > MAX_FILE_SIZE:
+            return size_bytes
+
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            _file_cache[path] = f.readlines()
+        return size_bytes
+    except Exception:
+        return 0
+
+def _prepopulate_cache(project_path: Path):
+    try:
+        ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build', '.next', '.cache'}
+        code_exts = {'.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.scss', '.json', '.yaml', '.yml', '.md', '.txt', '.sh', '.bash', '.zsh', '.rs', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rb', '.php', '.swift', '.kt'}
+        valid_names = {'Dockerfile', 'Makefile', 'docker-compose.yml', 'docker-compose.yaml'}
+        
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+            for file in files:
+                p = Path(root) / file
+                if p.suffix in code_exts or p.name in valid_names:
+                    _cache_file_contents(str(p))
+    except Exception as e:
+        print(f"Error prepopulating cache for {project_path}: {e}")
+
+def _get_cached_line_count(path: str) -> int:
+    return len(_file_cache.get(path, []))
+
+def _build_moved_diff(src_path: str, dest_path: Optional[str]) -> Dict[str, Any]:
+    removed_lines = _get_cached_line_count(src_path)
+    _file_cache.pop(src_path, None)
+    size_bytes = 0
+    added_lines = 0
+    if dest_path:
+        size_bytes = _cache_file_contents(dest_path)
+        added_lines = _get_cached_line_count(dest_path)
+    return {
+        "lines_added": added_lines,
+        "lines_removed": removed_lines,
+        "diff": "File moved.",
+        "size_bytes": size_bytes,
+    }
+
 # ── File Event Handler (só se watchdog disponível) ───────────────────────────
 if WATCHDOG_AVAILABLE:
     class ProjectEventHandler(FileSystemEventHandler):
@@ -115,7 +196,7 @@ if WATCHDOG_AVAILABLE:
                 abs_path = os.path.abspath(path)
                 abs_project = os.path.abspath(self.project_path)
                 
-                if not abs_path.startswith(abs_project):
+                if not _path_within_project(abs_path, abs_project):
                     return False
                 
                 p = Path(abs_path)
@@ -139,29 +220,48 @@ if WATCHDOG_AVAILABLE:
             return False
 
         def _log_event(self, event_type: str, src_path: str, dest_path: Optional[str] = None, extra: Optional[Dict] = None):
-            if not self._is_relevant(src_path):
-                return
-            if self._should_debounce(src_path):
+            is_moved = event_type == "moved"
+            relevant_src = self._is_relevant(src_path)
+            relevant_dest = self._is_relevant(dest_path) if dest_path else False
+
+            if is_moved:
+                if not (relevant_src or relevant_dest):
+                    return
+            else:
+                if not relevant_src:
+                    return
+
+            debounce_key = dest_path if is_moved and relevant_dest and not relevant_src else src_path
+            if debounce_key and self._should_debounce(debounce_key):
                 return
 
             print(f"🔔 Evento: {event_type} em {src_path}")
             
             abs_src = os.path.abspath(src_path)
-            diff_info = calculate_diff(abs_src, event_type)
+            abs_dest = os.path.abspath(dest_path) if dest_path else None
+            event_path = abs_dest if is_moved and relevant_dest and abs_dest else abs_src
+
+            if is_moved:
+                diff_info = _build_moved_diff(abs_src, abs_dest if relevant_dest else None)
+            else:
+                diff_info = calculate_diff(abs_src, event_type)
             
             event = {
                 "id": str(uuid4()),
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "type": event_type,
-                "path": abs_src,
-                "relative_path": os.path.relpath(abs_src, self.project_path),
+                "path": event_path,
+                "relative_path": os.path.relpath(event_path, self.project_path),
+                "project_path": str(self.project_path),
                 "lines_added": diff_info["lines_added"],
                 "lines_removed": diff_info["lines_removed"],
                 "size_bytes": diff_info["size_bytes"],
                 "diff": diff_info["diff"],
             }
-            if dest_path:
-                event["dest_path"] = os.path.abspath(dest_path)
+            if abs_dest:
+                event["dest_path"] = abs_dest
+                if relevant_dest:
+                    event["dest_relative_path"] = os.path.relpath(abs_dest, self.project_path)
             if extra:
                 event.update(extra)
 
@@ -292,6 +392,11 @@ async def lifespan(app: FastAPI):
         database.create_tables()
         print("Database initialized")
         events = database.load_events(5000)
+        settings = load_settings()
+        projects = settings.get("projects", [])
+        for evt in events:
+            if not evt.get("project_path") and evt.get("path"):
+                evt["project_path"] = _infer_project_path(evt["path"], projects)
         if events:
             _activity_buffer.extend(events)
             print(f"Loaded {len(events)} events from database")
@@ -354,8 +459,8 @@ async def api_status():
         "project_path": str(_project_path) if _project_path else None,
         "observers_running": len(_observers),
         "total_observers": len(_observers),
-        "events_in_buffer": len(_activity_buffer),
-        "total_events": len(_activity_buffer),
+        "events_in_buffer": len(_filter_events_for_current_project(_activity_buffer)),
+        "total_events": len(_filter_events_for_current_project(_activity_buffer)),
         "uptime_seconds": int(time.time() - _start_time) if '_start_time' in globals() else 0,
     })
 
@@ -413,7 +518,7 @@ async def api_files():
 
 @app.get("/api/activities")
 async def api_activities(limit: int = 50, offset: int = 0, event_type: Optional[str] = None):
-    events = _activity_buffer.copy()
+    events = _filter_events_for_current_project(_activity_buffer)
     if event_type and event_type != 'all':
         events = [e for e in events if e.get('type') == event_type]
     total = len(events)
@@ -422,7 +527,7 @@ async def api_activities(limit: int = 50, offset: int = 0, event_type: Optional[
 
 @app.get("/api/stats")
 async def api_stats():
-    events = _activity_buffer
+    events = _filter_events_for_current_project(_activity_buffer)
     if not events:
         return JSONResponse({
             "total_events": 0, "files_modified": 0, "lines_added": 0, "lines_removed": 0,
@@ -457,7 +562,7 @@ async def api_stats():
 
 @app.get("/api/event/{event_id}")
 async def api_event_detail(event_id: str):
-    for evt in _activity_buffer:
+    for evt in _filter_events_for_current_project(_activity_buffer):
         if evt.get("id") == event_id:
             return JSONResponse({
                 "event": evt,
@@ -474,7 +579,7 @@ async def api_event_detail(event_id: str):
 async def api_stats_advanced():
     """Advanced statistics with analytics."""
     try:
-        stats = database.get_advanced_stats()
+        stats = database.get_advanced_stats(_current_project_path())
         return JSONResponse(stats)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -496,8 +601,9 @@ async def api_search(q: str = "", limit: int = 20):
         return JSONResponse({"events": [], "files": []})
     
     try:
-        events = database.search_events(q, limit)
-        files = database.search_files(q)
+        project_path = _current_project_path()
+        events = database.search_events(q, limit, project_path)
+        files = database.search_files(q, project_path)
         return JSONResponse({"events": events, "files": files})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -534,33 +640,29 @@ async def api_health():
     })
 
 @app.get("/api/browse")
-async def api_browse():
-    """Abre explorador nativo do sistema."""
-    import platform
-    system = platform.system()
-    
+async def api_browse(path: str = None):
+    """Retorna lista de diretórios para o navegador de arquivos."""
     try:
-        if system == "Linux":
-            for cmd in [
-                ["zenity", "--file-selection", "--directory", "--title=Selecionar Pasta"],
-                ["kdialog", "--getexistingdirectory"],
-                ["python3", "-c", "import tkinter; from tkinter import filedialog; print(filedialog.askdirectory(title='Selecionar Pasta'))"],
-            ]:
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode == 0 and result.stdout.strip():
-                    return JSONResponse({"path": result.stdout.strip()})
-        elif system == "Darwin":
-            result = subprocess.run(["osascript", "-e", 'choose folder'], capture_output=True, text=True)
-            if result.returncode == 0:
-                return JSONResponse({"path": result.stdout.strip()})
-        elif system == "Windows":
-            result = subprocess.run(["powershell", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.FolderBrowserDialog]::new().SelectedPath"], capture_output=True, text=True)
-            if result.returncode == 0:
-                return JSONResponse({"path": result.stdout.strip()})
+        if not path:
+            path = str(Path.home())
+        
+        p = Path(path).expanduser().resolve()
+        
+        if not p.exists() or not p.is_dir():
+            return JSONResponse({"error": "Directory not found"}, status_code=400)
+            
+        directories = [d.name for d in p.iterdir() if d.is_dir() and not d.name.startswith('.')]
+        directories.sort()
+        
+        parent_path = str(p.parent) if p.parent != p else None
+        
+        return JSONResponse({
+            "current_path": str(p),
+            "parent_path": parent_path,
+            "directories": directories
+        })
     except Exception as e:
-        pass
-    
-    return JSONResponse({"path": None, "error": "Native explorer not available"})
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/api/file")
 async def api_file(path: str):
@@ -594,6 +696,8 @@ async def api_set_project(payload: dict = Body(...)):
     
     # Add to projects list
     settings = add_project(str(p))
+    settings["last_project"] = str(p)
+    save_settings(settings)
     active_projects = settings.get("active_projects", [])
     
     # Start observing this project
@@ -606,6 +710,8 @@ async def api_set_project(payload: dict = Body(...)):
                 observer.start()
                 _observers[p] = observer
                 print(f"👀 Observando: {p}")
+                # Prepopulate cache so diff works for first edit
+                _prepopulate_cache(p)
             except Exception as e:
                 print(f"❌ Erro ao iniciar observer: {e}")
     
@@ -626,7 +732,8 @@ async def api_projects():
     settings = load_settings()
     return JSONResponse({
         "projects": settings.get("projects", []),
-        "active_projects": settings.get("active_projects", [])
+        "active_projects": settings.get("active_projects", []),
+        "last_project": settings.get("last_project")
     })
 
 @app.post("/api/projects/remove")
@@ -647,6 +754,10 @@ async def api_remove_project(payload: dict = Body(...)):
             del _observers[p]
         except Exception:
             pass
+
+    if _project_path and _project_path == p:
+        remaining = [Path(path).expanduser().resolve() for path in settings.get("active_projects", [])]
+        _project_path = remaining[0] if remaining else None
     
     return JSONResponse({
         "status": "ok",
@@ -657,12 +768,18 @@ async def api_remove_project(payload: dict = Body(...)):
 @app.post("/api/reset")
 async def api_reset():
     global _activity_buffer
-    try:
-        if LOG_PATH.exists():
-            LOG_PATH.unlink()
-    except Exception:
-        pass
-    _activity_buffer.clear()
+    current = _current_project_path()
+    if current:
+        _activity_buffer = [evt for evt in _activity_buffer if not _event_matches_project(evt, current)]
+        database.clear_events(current)
+    else:
+        try:
+            if LOG_PATH.exists():
+                LOG_PATH.unlink()
+        except Exception:
+            pass
+        _activity_buffer.clear()
+        database.clear_events()
     return JSONResponse({"status": "ok", "message": "Log resetado"})
 
 @app.websocket("/ws")

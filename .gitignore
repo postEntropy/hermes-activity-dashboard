@@ -8,5 +8,8 @@
 !frontend/*
 
 # Ignora pastas internas do frontend (se houver)
-frontend/*/
+frontend/node_modules/
+frontend/dist/
 !.gitignore
+!frontend/src/
+!frontend/src/**
